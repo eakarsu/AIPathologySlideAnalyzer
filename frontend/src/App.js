@@ -35,6 +35,7 @@ import GapNoWebhooksForLabResultDeliveryPage from './pages/GapNoWebhooksForLabRe
 import GapNoNotificationsLayerGrepReturned0NotificatioPage from './pages/GapNoNotificationsLayerGrepReturned0NotificatioPage';
 import GapLimitedRbacBasicAuthOnlyPage from './pages/GapLimitedRbacBasicAuthOnlyPage';
 import Extensions from './pages/Extensions'; // Apply pass 5
+import CustomViewsPage from './pages/CustomViewsPage';
 
 function Sidebar({ onLogout }) {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
@@ -54,6 +55,7 @@ function Sidebar({ onLogout }) {
     { path: '/equipment', icon: '\u2699\uFE0F', label: 'Lab Equipment' },
     { path: '/audit-logs', icon: '\u{1F4DD}', label: 'Audit Log' },
     { path: '/extensions', icon: '\u{1F9E9}', label: 'Extensions' },
+    { path: '/custom-views', icon: '\u{1F9EA}', label: 'Pathology Views' },
     { path: '/settings', icon: '\u{1F527}', label: 'Settings' },
   ];
 
@@ -123,6 +125,7 @@ function App() {
           { path: '/equipment', el: <Equipment /> },
           { path: '/audit-logs', el: <AuditLogs /> },
           { path: '/extensions', el: <Extensions /> },
+          { path: '/custom-views', el: <CustomViewsPage /> },
           { path: '/settings', el: <Settings /> },
         ].map(r => (
           <Route key={r.path} path={r.path} element={<ProtectedLayout onLogout={handleLogout}>{r.el}</ProtectedLayout>} />

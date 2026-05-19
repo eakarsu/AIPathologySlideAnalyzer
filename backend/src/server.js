@@ -701,6 +701,15 @@ app.use('/api/gap-no-webhooks-for-lab-result-delivery', require('./routes/gapFea
 app.use('/api/gap-no-notifications-layer-grep-returned-0-notificatio', require('./routes/gapFeat_no_notifications_layer_grep_returned_0_notificatio'));
 app.use('/api/gap-limited-rbac-basic-auth-only', require('./routes/gapFeat_limited_rbac_basic_auth_only'));
 
+// === Custom Views (4 endpoints) — mounted BEFORE any 404 handler ===
+app.use('/api/custom-views', require('./routes/customViews'));
+
+// Health probe — used by automation
+app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'pathology-analyzer', ts: Date.now() }));
+
+// 404 handler — placed AFTER all routes (including custom-views)
+app.use((req, res) => res.status(404).json({ error: 'Not found', path: req.originalUrl }));
+
 app.listen(PORT, () => {
     console.log(`\nPathology Analyzer API running on http://localhost:${PORT}`);
     console.log(`AI Model: ${process.env.OPENROUTER_MODEL || 'anthropic/claude-3-5-sonnet-20241022'}`);
