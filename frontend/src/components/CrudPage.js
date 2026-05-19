@@ -38,9 +38,23 @@ export default function CrudPage({
 
   const showToast = (msg, type = 'success') => { setToast({ msg, type }); setTimeout(() => setToast(null), 3000); };
 
-  const load = () => apiGet().then(setItems).catch(e => showToast(e.message, 'error'));
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
 
-  useEffect(() => { load(); }, []);
+  const load = (p = 1) => apiGet({ page: p, limit: 20 }).then(result => {
+    if (Array.isArray(result)) {
+      setItems(result);
+      setTotal(result.length);
+      setTotalPages(1);
+    } else if (result && result.data) {
+      setItems(result.data);
+      setTotal(result.total || result.data.length);
+      setTotalPages(result.totalPages || 1);
+    }
+  }).catch(e => showToast(e.message, 'error'));
+
+  useEffect(() => { load(page); }, [page]);
 
   const handleRowClick = async (item) => {
     if (apiGetOne) {
@@ -71,7 +85,7 @@ export default function CrudPage({
       showToast('Deleted successfully');
       setShowDetail(false);
       setSelected(null);
-      load();
+      load(page);
     } catch (e) { showToast(e.message, 'error'); }
   };
 
@@ -87,7 +101,7 @@ export default function CrudPage({
       }
       setShowForm(false);
       setShowDetail(false);
-      load();
+      load(page);
     } catch (e) { showToast(e.message, 'error'); }
   };
 
@@ -96,8 +110,8 @@ export default function CrudPage({
     setAiResult(null);
     try {
       const result = await action.handler(selected);
-      setAiResult(result);
-      if (action.refresh) load();
+      if (result !== null) setAiResult(result);
+      if (action.refresh) load(page);
       showToast(action.successMsg || 'AI analysis complete');
     } catch (e) {
       showToast(e.message, 'error');
@@ -115,13 +129,13 @@ export default function CrudPage({
   return (
     <div>
       <div className="page-header">
-        <h1>{icon} {title}</h1>
+        <h1>{icon} {title} {total > 0 && <span style={{ fontSize: 14, fontWeight: 'normal', color: '#9ca3af' }}>({total})</span>}</h1>
         <div style={{ display: 'flex', gap: 12 }}>
           {apiCreate && <button className="btn btn-primary" onClick={handleNew}>+ New {title.replace(/s$/, '').replace(/ie$/, 'y')}</button>}
         </div>
       </div>
 
-      <input className="search-bar" placeholder={`Search ${title.toLowerCase()}...`} value={search} onChange={e => setSearch(e.target.value)} />
+      <input className="search-bar" placeholder={`Search ${title.toLowerCase()}...`} value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} />
 
       <div className="data-table-container">
         <table className="data-table">
@@ -157,6 +171,21 @@ export default function CrudPage({
           </tbody>
         </table>
       </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, marginTop: 16, padding: '8px 0' }}>
+          <button className="btn btn-secondary btn-sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}>Prev</button>
+          {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+            const p = Math.max(1, Math.min(totalPages - 4, page - 2)) + i;
+            return (
+              <button key={p} className={`btn btn-sm ${p === page ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setPage(p)}>{p}</button>
+            );
+          })}
+          <button className="btn btn-secondary btn-sm" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages}>Next</button>
+          <span style={{ color: '#9ca3af', fontSize: 13 }}>Page {page} of {totalPages}</span>
+        </div>
+      )}
 
       {/* Detail Panel */}
       {showDetail && selected && (
@@ -216,7 +245,7 @@ export default function CrudPage({
               <div className="ai-response">
                 <div className="ai-response-header">
                   <span className="ai-badge">AI Analysis Result</span>
-                  <span className="ai-model">claude-haiku-4.5 via OpenRouter</span>
+                  <span className="ai-model">claude-3-5-sonnet-20241022 via OpenRouter</span>
                 </div>
                 <div className="ai-response-body" dangerouslySetInnerHTML={{
                   __html: formatAIResponse(

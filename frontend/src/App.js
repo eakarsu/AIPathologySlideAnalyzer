@@ -17,6 +17,25 @@ import Billing from './pages/Billing';
 import Equipment from './pages/Equipment';
 import AuditLogs from './pages/AuditLogs';
 import Settings from './pages/Settings';
+// // === Batch 06 Gaps & Frontend Mounts ===
+import CFAiPathologyAssistantPage from './pages/CFAiPathologyAssistantPage';
+import CFSecondOpinionConsensusPage from './pages/CFSecondOpinionConsensusPage';
+import CFEducationalModePage from './pages/CFEducationalModePage';
+import CFRegistryIntegrationPage from './pages/CFRegistryIntegrationPage';
+import CFQualityAssuranceLoopPage from './pages/CFQualityAssuranceLoopPage';
+import GapQualityAssessPage from './pages/GapQualityAssessPage';
+import GapMultiPage from './pages/GapMultiPage';
+import GapAutoReportGeneratePage from './pages/GapAutoReportGeneratePage';
+import GapNoDedicatedRoutesDirectoryAllRoutesInlineInPage from './pages/GapNoDedicatedRoutesDirectoryAllRoutesInlineInPage';
+import GapNoDicomServerIntegrationMedicalImageStandardPage from './pages/GapNoDicomServerIntegrationMedicalImageStandardPage';
+import GapNoLisLabInformationSystemIntegrationPage from './pages/GapNoLisLabInformationSystemIntegrationPage';
+import GapNoWholeSlideImageWsiViewerOnlyStoredImagesPage from './pages/GapNoWholeSlideImageWsiViewerOnlyStoredImagesPage';
+import GapNoMultiPage from './pages/GapNoMultiPage';
+import GapNoWebhooksForLabResultDeliveryPage from './pages/GapNoWebhooksForLabResultDeliveryPage';
+import GapNoNotificationsLayerGrepReturned0NotificatioPage from './pages/GapNoNotificationsLayerGrepReturned0NotificatioPage';
+import GapLimitedRbacBasicAuthOnlyPage from './pages/GapLimitedRbacBasicAuthOnlyPage';
+import Extensions from './pages/Extensions'; // Apply pass 5
+import CustomViewsPage from './pages/CustomViewsPage';
 
 function Sidebar({ onLogout }) {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
@@ -35,6 +54,8 @@ function Sidebar({ onLogout }) {
     { path: '/billing', icon: '\u{1F4B0}', label: 'Billing' },
     { path: '/equipment', icon: '\u2699\uFE0F', label: 'Lab Equipment' },
     { path: '/audit-logs', icon: '\u{1F4DD}', label: 'Audit Log' },
+    { path: '/extensions', icon: '\u{1F9E9}', label: 'Extensions' },
+    { path: '/custom-views', icon: '\u{1F9EA}', label: 'Pathology Views' },
     { path: '/settings', icon: '\u{1F527}', label: 'Settings' },
   ];
 
@@ -103,11 +124,31 @@ function App() {
           { path: '/billing', el: <Billing /> },
           { path: '/equipment', el: <Equipment /> },
           { path: '/audit-logs', el: <AuditLogs /> },
+          { path: '/extensions', el: <Extensions /> },
+          { path: '/custom-views', el: <CustomViewsPage /> },
           { path: '/settings', el: <Settings /> },
         ].map(r => (
           <Route key={r.path} path={r.path} element={<ProtectedLayout onLogout={handleLogout}>{r.el}</ProtectedLayout>} />
         ))}
-      </Routes>
+      
+          {/* // === Batch 06 Gaps & Frontend Mounts === */}
+          <Route path="/cf-ai-pathology-assistant" element={<CFAiPathologyAssistantPage />} />
+          <Route path="/cf-second-opinion-consensus" element={<CFSecondOpinionConsensusPage />} />
+          <Route path="/cf-educational-mode" element={<CFEducationalModePage />} />
+          <Route path="/cf-registry-integration" element={<CFRegistryIntegrationPage />} />
+          <Route path="/cf-quality-assurance-loop" element={<CFQualityAssuranceLoopPage />} />
+          <Route path="/gap-quality-assess" element={<GapQualityAssessPage />} />
+          <Route path="/gap-multi" element={<GapMultiPage />} />
+          <Route path="/gap-auto-report-generate" element={<GapAutoReportGeneratePage />} />
+          <Route path="/gap-no-dedicated-routes-directory-all-routes-inline-in" element={<GapNoDedicatedRoutesDirectoryAllRoutesInlineInPage />} />
+          <Route path="/gap-no-dicom-server-integration-medical-image-standard" element={<GapNoDicomServerIntegrationMedicalImageStandardPage />} />
+          <Route path="/gap-no-lis-lab-information-system-integration" element={<GapNoLisLabInformationSystemIntegrationPage />} />
+          <Route path="/gap-no-whole-slide-image-wsi-viewer-only-stored-images" element={<GapNoWholeSlideImageWsiViewerOnlyStoredImagesPage />} />
+          <Route path="/gap-no-multi" element={<GapNoMultiPage />} />
+          <Route path="/gap-no-webhooks-for-lab-result-delivery" element={<GapNoWebhooksForLabResultDeliveryPage />} />
+          <Route path="/gap-no-notifications-layer-grep-returned-0-notificatio" element={<GapNoNotificationsLayerGrepReturned0NotificatioPage />} />
+          <Route path="/gap-limited-rbac-basic-auth-only" element={<GapLimitedRbacBasicAuthOnlyPage />} />
+        </Routes>
     </BrowserRouter>
   );
 }

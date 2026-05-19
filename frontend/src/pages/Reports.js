@@ -3,6 +3,34 @@ import CrudPage from '../components/CrudPage';
 import api from '../services/api';
 
 export default function Reports() {
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const isPathologist = user.role === 'pathologist' || user.role === 'admin';
+
+  const aiActions = [
+    {
+      label: 'AI Generate Report',
+      handler: async (item) => {
+        const result = await api.generateReport(item.slide_id);
+        return result;
+      },
+      refresh: true,
+      successMsg: 'AI report generated',
+    },
+  ];
+
+  if (isPathologist) {
+    aiActions.push({
+      label: 'Sign Off',
+      handler: async (item) => {
+        if (!window.confirm('Sign off this report? This action marks it as officially signed.')) return null;
+        const result = await api.signOffReport(item.id);
+        return result;
+      },
+      refresh: true,
+      successMsg: 'Report signed off successfully',
+    });
+  }
+
   return (
     <CrudPage
       title="Pathology Reports"
@@ -19,6 +47,7 @@ export default function Reports() {
         { key: 'pathologist', label: 'Pathologist' },
         { key: 'diagnosis', label: 'Diagnosis' },
         { key: 'status', label: 'Status', type: 'status' },
+        { key: 'signed_at', label: 'Signed', type: 'date' },
       ]}
       formFields={[
         { key: 'report_id', label: 'Report ID', required: true },
@@ -43,21 +72,12 @@ export default function Reports() {
         { key: 'clinical_history', label: 'Clinical History' },
         { key: 'recommendations', label: 'Recommendations' },
         { key: 'status', label: 'Status' },
-        { key: 'signed_date', label: 'Signed Date' },
+        { key: 'signed_by', label: 'Signed By (User ID)' },
+        { key: 'signed_at', label: 'Signed At' },
         { key: 'created_at', label: 'Created' },
       ]}
       aiFields={['microscopic_findings', 'recommendations']}
-      aiActions={[
-        {
-          label: 'AI Generate Report',
-          handler: async (item) => {
-            const result = await api.generateReport(item.slide_id);
-            return result;
-          },
-          refresh: true,
-          successMsg: 'AI report generated',
-        },
-      ]}
+      aiActions={aiActions}
       newItemDefaults={{ report_id: `RPT-${Date.now().toString(36).toUpperCase()}`, status: 'draft' }}
     />
   );

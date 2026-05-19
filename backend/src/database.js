@@ -224,6 +224,28 @@ const initDB = async () => {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+
+    // Additional columns and tables (run separately to handle if already exists)
+    const alterations = [
+      `ALTER TABLE pathology_reports ADD COLUMN IF NOT EXISTS signed_by INTEGER`,
+      `ALTER TABLE pathology_reports ADD COLUMN IF NOT EXISTS signed_at TIMESTAMP`,
+      `ALTER TABLE quality_controls ADD COLUMN IF NOT EXISTS assessment TEXT`,
+      `CREATE TABLE IF NOT EXISTS ai_image_analyses (
+        id SERIAL PRIMARY KEY,
+        slide_id INTEGER REFERENCES slides(id) ON DELETE CASCADE,
+        tissue_type TEXT,
+        cell_morphology TEXT,
+        abnormalities JSONB,
+        cancer_probability DECIMAL(4,3),
+        confidence DECIMAL(4,3),
+        findings JSONB,
+        raw_response JSONB,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`,
+    ];
+    for (const sql of alterations) {
+      try { await client.query(sql); } catch {}
+    }
     console.log('Database tables initialized successfully');
   } finally {
     client.release();

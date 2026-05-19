@@ -1,7 +1,11 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const { pool, initDB } = require('./database');
 const ai = require('./openrouter');
 require('dotenv').config({ path: require('path').join(__dirname, '../../.env') });
@@ -9,20 +13,80 @@ require('dotenv').config({ path: require('path').join(__dirname, '../../.env') }
 const app = express();
 const PORT = process.env.BACKEND_PORT || 3001;
 
-app.use(cors());
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('FATAL: JWT_SECRET environment variable is required');
+  process.exit(1);
+}
+
+app.use(helmet());
+app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:3000', credentials: true }));
 app.use(express.json());
 
-// JWT Middleware
+// Serve uploaded images
+const UPLOADS_DIR = path.join(__dirname, '../../uploads/slides');
+fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+app.use('/uploads', express.static(path.join(__dirname, '../../uploads')));
+
+// Multer config for slide images
+const slideImageStorage = multer.diskStorage({
+  destination: UPLOADS_DIR,
+  filename: (req, file, cb) => cb(null, `slide-${req.params.id}-${Date.now()}${path.extname(file.originalname)}`),
+});
+const slideImageUpload = multer({ storage: slideImageStorage, limits: { fileSize: 50 * 1024 * 1024 } });
+
+// ── In-memory rate limiter (20/hour per user for AI routes) ───────────────────
+const rateLimitStore = new Map();
+function aiRateLimiter(req, res, next) {
+  const key = `ai:${req.user?.id || 'anon'}`;
+  const now = Date.now();
+  const windowMs = 3_600_000;
+  const maxRequests = 20;
+  const entry = rateLimitStore.get(key) || { count: 0, resetAt: now + windowMs };
+  if (now > entry.resetAt) { entry.count = 0; entry.resetAt = now + windowMs; }
+  entry.count++;
+  rateLimitStore.set(key, entry);
+  res.setHeader('X-RateLimit-Limit', maxRequests);
+  res.setHeader('X-RateLimit-Remaining', Math.max(0, maxRequests - entry.count));
+  if (entry.count > maxRequests) return res.status(429).json({ error: 'Rate limit exceeded. 20 AI requests per hour.' });
+  next();
+}
+
+// ── JWT Middleware ─────────────────────────────────────────────────────────────
 const authMiddleware = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'No token provided' });
   try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET || 'pathology-analyzer-secret-key-2024');
+    req.user = jwt.verify(token, JWT_SECRET);
     next();
   } catch {
     res.status(401).json({ error: 'Invalid token' });
   }
 };
+
+// ── Role-based access control ─────────────────────────────────────────────────
+const authorize = (...roles) => (req, res, next) => {
+  if (!roles.includes(req.user.role)) return res.status(403).json({ error: 'Forbidden: insufficient role' });
+  next();
+};
+
+// ── AUDIT LOG HELPER ──────────────────────────────────────────────────────────
+async function logAudit(userEmail, action, entityType, entityId, details) {
+  try {
+    await pool.query(
+      `INSERT INTO audit_logs (user_email, action, entity_type, entity_id, details) VALUES ($1, $2, $3, $4, $5)`,
+      [userEmail, action, entityType, entityId, details]
+    );
+  } catch {}
+}
+
+// ── PAGINATION HELPER ─────────────────────────────────────────────────────────
+function paginate(req) {
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(200, Math.max(1, parseInt(req.query.limit) || 20));
+  const offset = (page - 1) * limit;
+  return { page, limit, offset };
+}
 
 // ==================== AUTH ====================
 app.post('/api/auth/login', async (req, res) => {
@@ -33,9 +97,28 @@ app.post('/api/auth/login', async (req, res) => {
     const user = result.rows[0];
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
-    const token = jwt.sign({ id: user.id, email: user.email, name: user.name, role: user.role },
-      process.env.JWT_SECRET || 'pathology-analyzer-secret-key-2024', { expiresIn: '24h' });
+    const token = jwt.sign({ id: user.id, email: user.email, name: user.name, role: user.role }, JWT_SECRET, { expiresIn: '24h' });
     res.json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { email, password, name, role } = req.body;
+    if (!email || !password || !name) return res.status(400).json({ error: 'email, password, and name are required' });
+    const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+    if (existing.rows.length > 0) return res.status(409).json({ error: 'Email already registered' });
+    const hashed = await bcrypt.hash(password, 12);
+    const userRole = role && ['pathologist', 'lab_tech', 'admin'].includes(role) ? role : 'pathologist';
+    const result = await pool.query(
+      'INSERT INTO users (email, password, name, role) VALUES ($1, $2, $3, $4) RETURNING id, email, name, role, created_at',
+      [email, hashed, name, userRole]
+    );
+    const newUser = result.rows[0];
+    const token = jwt.sign({ id: newUser.id, email: newUser.email, name: newUser.name, role: newUser.role }, JWT_SECRET, { expiresIn: '24h' });
+    res.status(201).json({ token, user: newUser });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -46,8 +129,11 @@ function createCRUD(tableName, idField = 'id') {
   return {
     getAll: async (req, res) => {
       try {
-        const result = await pool.query(`SELECT * FROM ${tableName} ORDER BY id DESC`);
-        res.json(result.rows);
+        const { page, limit, offset } = paginate(req);
+        const countResult = await pool.query(`SELECT COUNT(*) FROM ${tableName}`);
+        const total = parseInt(countResult.rows[0].count);
+        const result = await pool.query(`SELECT * FROM ${tableName} ORDER BY id DESC LIMIT $1 OFFSET $2`, [limit, offset]);
+        res.json({ data: result.rows, total, page, limit, totalPages: Math.ceil(total / limit) });
       } catch (err) { res.status(500).json({ error: err.message }); }
     },
     getOne: async (req, res) => {
@@ -69,7 +155,15 @@ function createCRUD(tableName, idField = 'id') {
 // ==================== PATIENTS ====================
 const patients = createCRUD('patients');
 app.get('/api/patients', authMiddleware, patients.getAll);
-app.get('/api/patients/:id', authMiddleware, patients.getOne);
+app.get('/api/patients/:id', authMiddleware, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM patients WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    // HIPAA audit log on patient read
+    await logAudit(req.user.email, 'view_patient', 'patient', req.params.id, `Patient record accessed by ${req.user.email}`);
+    res.json(result.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 app.delete('/api/patients/:id', authMiddleware, patients.delete);
 app.post('/api/patients', authMiddleware, async (req, res) => {
   try {
@@ -120,26 +214,79 @@ app.put('/api/slides/:id', authMiddleware, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// POST /api/slides/:id/upload-image — upload image for a slide
+app.post('/api/slides/:id/upload-image', authMiddleware, slideImageUpload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No image file uploaded' });
+    const imageUrl = `/uploads/slides/${req.file.filename}`;
+    const result = await pool.query(
+      'UPDATE slides SET image_url = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *',
+      [imageUrl, req.params.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Slide not found' });
+    res.json({ message: 'Image uploaded successfully', image_url: imageUrl, slide: result.rows[0] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/slides/:id/analyze-image — vision AI analysis of uploaded image
+app.post('/api/slides/:id/analyze-image', authMiddleware, aiRateLimiter, async (req, res) => {
+  try {
+    const slideResult = await pool.query('SELECT * FROM slides WHERE id = $1', [req.params.id]);
+    if (slideResult.rows.length === 0) return res.status(404).json({ error: 'Slide not found' });
+    const slide = slideResult.rows[0];
+    if (!slide.image_url) return res.status(400).json({ error: 'No image uploaded for this slide. Upload an image first.' });
+
+    const imagePath = path.join(__dirname, '../../', slide.image_url);
+    if (!fs.existsSync(imagePath)) return res.status(404).json({ error: 'Image file not found on disk' });
+
+    const imageData = fs.readFileSync(imagePath);
+    const base64 = imageData.toString('base64');
+    const ext = path.extname(imagePath).toLowerCase();
+    const mimeType = ext === '.png' ? 'image/png' : ext === '.gif' ? 'image/gif' : 'image/jpeg';
+
+    const aiResult = await ai.analyzeSlideImage(base64, mimeType);
+
+    const insertResult = await pool.query(
+      `INSERT INTO ai_image_analyses (slide_id, tissue_type, cell_morphology, abnormalities, cancer_probability, confidence, findings, raw_response)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [
+        slide.id,
+        aiResult.tissue_type || null,
+        aiResult.cell_morphology || null,
+        JSON.stringify(aiResult.abnormalities || []),
+        aiResult.cancer_probability || null,
+        aiResult.confidence || null,
+        JSON.stringify(aiResult.findings || []),
+        JSON.stringify(aiResult),
+      ]
+    );
+
+    await logAudit(req.user.email, 'AI_IMAGE_ANALYSIS', 'slide', slide.id, `Vision AI analysis for slide ${slide.slide_id}`);
+    res.status(201).json(insertResult.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ==================== AI ANALYSES ====================
 const analyses = createCRUD('ai_analyses');
 app.get('/api/analyses', authMiddleware, analyses.getAll);
 app.get('/api/analyses/:id', authMiddleware, analyses.getOne);
 app.delete('/api/analyses/:id', authMiddleware, analyses.delete);
-app.post('/api/analyses/run/:slideId', authMiddleware, async (req, res) => {
+app.post('/api/analyses/run/:slideId', authMiddleware, aiRateLimiter, async (req, res) => {
   try {
     const slideResult = await pool.query('SELECT * FROM slides WHERE id = $1', [req.params.slideId]);
     if (slideResult.rows.length === 0) return res.status(404).json({ error: 'Slide not found' });
     const slide = slideResult.rows[0];
     const startTime = Date.now();
-    const aiResult = await ai.analyzeSlide(slide);
+    const structured = await ai.analyzeSlideStructured(slide);
     const processingTime = Date.now() - startTime;
+    const confidenceScore = structured.confidence_score || 90;
+    const findings = structured.summary || structured.key_findings?.join('\n') || JSON.stringify(structured);
     const result = await pool.query(
       `INSERT INTO ai_analyses (slide_id, analysis_type, status, confidence_score, findings, ai_model, processing_time_ms, result_data)
        VALUES ($1, 'comprehensive', 'completed', $2, $3, $4, $5, $6) RETURNING *`,
-      [slide.id, (85 + Math.random() * 12).toFixed(2), aiResult, process.env.OPENROUTER_MODEL, processingTime, JSON.stringify({ raw_response: aiResult })]
+      [slide.id, confidenceScore, findings, process.env.OPENROUTER_MODEL || 'anthropic/claude-3-5-sonnet-20241022', processingTime, JSON.stringify(structured)]
     );
-    await pool.query(`INSERT INTO audit_logs (user_email, action, entity_type, entity_id, details) VALUES ($1, 'AI_ANALYSIS', 'slide', $2, $3)`,
-      [req.user.email, slide.id, `AI analysis completed for slide ${slide.slide_id}`]);
+    await logAudit(req.user.email, 'AI_ANALYSIS', 'slide', slide.id, `AI analysis completed for slide ${slide.slide_id}`);
     res.status(201).json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -149,19 +296,19 @@ const cancerDetections = createCRUD('cancer_detections');
 app.get('/api/cancer-detections', authMiddleware, cancerDetections.getAll);
 app.get('/api/cancer-detections/:id', authMiddleware, cancerDetections.getOne);
 app.delete('/api/cancer-detections/:id', authMiddleware, cancerDetections.delete);
-app.post('/api/cancer-detections/run/:slideId', authMiddleware, async (req, res) => {
+app.post('/api/cancer-detections/run/:slideId', authMiddleware, aiRateLimiter, async (req, res) => {
   try {
     const slideResult = await pool.query('SELECT * FROM slides WHERE id = $1', [req.params.slideId]);
     if (slideResult.rows.length === 0) return res.status(404).json({ error: 'Slide not found' });
     const slide = slideResult.rows[0];
-    const aiResult = await ai.detectCancer(slide);
+    const structured = await ai.detectCancerStructured(slide);
+    const probability = structured.probability || 0.5;
     const result = await pool.query(
       `INSERT INTO cancer_detections (slide_id, cancer_type, probability, grade, stage, markers, recommendation, status, reviewed_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending_review', $8) RETURNING *`,
-      [slide.id, `AI Detected - ${slide.organ}`, (Math.random() * 0.5 + 0.4).toFixed(4), 'Pending', 'Pending', 'AI Analysis', aiResult, req.user.name]
+      [slide.id, structured.cancer_type || `AI Detected - ${slide.organ}`, probability, structured.grade || 'Pending', structured.stage || 'Pending', structured.markers || 'AI Analysis', structured.recommendation || JSON.stringify(structured), req.user.name]
     );
-    await pool.query(`INSERT INTO audit_logs (user_email, action, entity_type, entity_id, details) VALUES ($1, 'AI_CANCER_DETECT', 'slide', $2, $3)`,
-      [req.user.email, slide.id, `Cancer detection for slide ${slide.slide_id}`]);
+    await logAudit(req.user.email, 'AI_CANCER_DETECT', 'slide', slide.id, `Cancer detection for slide ${slide.slide_id}`);
     res.status(201).json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -181,16 +328,16 @@ const cellClassifications = createCRUD('cell_classifications');
 app.get('/api/cell-classifications', authMiddleware, cellClassifications.getAll);
 app.get('/api/cell-classifications/:id', authMiddleware, cellClassifications.getOne);
 app.delete('/api/cell-classifications/:id', authMiddleware, cellClassifications.delete);
-app.post('/api/cell-classifications/run/:slideId', authMiddleware, async (req, res) => {
+app.post('/api/cell-classifications/run/:slideId', authMiddleware, aiRateLimiter, async (req, res) => {
   try {
     const slideResult = await pool.query('SELECT * FROM slides WHERE id = $1', [req.params.slideId]);
     if (slideResult.rows.length === 0) return res.status(404).json({ error: 'Slide not found' });
     const slide = slideResult.rows[0];
-    const aiResult = await ai.classifyCells(slide);
+    const structured = await ai.classifyCellsStructured(slide);
     const result = await pool.query(
       `INSERT INTO cell_classifications (slide_id, cell_type, count, percentage, morphology, abnormality_flag, confidence, notes)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [slide.id, 'AI Classification', Math.floor(Math.random() * 3000 + 500), (Math.random() * 60 + 20).toFixed(2), 'AI-analyzed morphology', false, (80 + Math.random() * 15).toFixed(2), aiResult]
+      [slide.id, structured.cell_type || 'AI Classification', structured.count || 1000, structured.percentage || 50, structured.morphology || 'AI-analyzed morphology', structured.abnormality_flag || false, structured.confidence || 85, structured.notes || JSON.stringify(structured)]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -211,16 +358,16 @@ const tissueSegmentations = createCRUD('tissue_segmentations');
 app.get('/api/tissue-segmentations', authMiddleware, tissueSegmentations.getAll);
 app.get('/api/tissue-segmentations/:id', authMiddleware, tissueSegmentations.getOne);
 app.delete('/api/tissue-segmentations/:id', authMiddleware, tissueSegmentations.delete);
-app.post('/api/tissue-segmentations/run/:slideId', authMiddleware, async (req, res) => {
+app.post('/api/tissue-segmentations/run/:slideId', authMiddleware, aiRateLimiter, async (req, res) => {
   try {
     const slideResult = await pool.query('SELECT * FROM slides WHERE id = $1', [req.params.slideId]);
     if (slideResult.rows.length === 0) return res.status(404).json({ error: 'Slide not found' });
     const slide = slideResult.rows[0];
-    const aiResult = await ai.segmentTissue(slide);
+    const structured = await ai.segmentTissueStructured(slide);
     const result = await pool.query(
       `INSERT INTO tissue_segmentations (slide_id, segment_type, area_percentage, tissue_class, health_status, density_score, notes)
        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [slide.id, 'AI Segment', (Math.random() * 60 + 10).toFixed(2), 'AI-classified', 'analyzed', (Math.random() * 8 + 2).toFixed(2), aiResult]
+      [slide.id, structured.segment_type || 'AI Segment', structured.area_percentage || 50, structured.tissue_class || 'AI-classified', structured.health_status || 'analyzed', structured.density_score || 5, structured.notes || JSON.stringify(structured)]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -241,7 +388,7 @@ const reports = createCRUD('pathology_reports');
 app.get('/api/reports', authMiddleware, reports.getAll);
 app.get('/api/reports/:id', authMiddleware, reports.getOne);
 app.delete('/api/reports/:id', authMiddleware, reports.delete);
-app.post('/api/reports', authMiddleware, async (req, res) => {
+app.post('/api/reports', authMiddleware, authorize('pathologist', 'admin'), async (req, res) => {
   try {
     const { report_id, patient_id, slide_id, pathologist, diagnosis, microscopic_findings, gross_description, clinical_history, recommendations, status } = req.body;
     const result = await pool.query(
@@ -262,7 +409,7 @@ app.put('/api/reports/:id', authMiddleware, async (req, res) => {
     res.json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-app.post('/api/reports/generate/:slideId', authMiddleware, async (req, res) => {
+app.post('/api/reports/generate/:slideId', authMiddleware, authorize('pathologist', 'admin'), aiRateLimiter, async (req, res) => {
   try {
     const slideResult = await pool.query('SELECT s.*, p.first_name, p.last_name, p.medical_history FROM slides s LEFT JOIN patients p ON s.patient_id = p.id WHERE s.id = $1', [req.params.slideId]);
     if (slideResult.rows.length === 0) return res.status(404).json({ error: 'Slide not found' });
@@ -281,6 +428,19 @@ app.post('/api/reports/generate/:slideId', authMiddleware, async (req, res) => {
       [reportId, slide.patient_id, slide.id, 'AI Generated', 'AI-generated - pending review', aiResult, slide.notes, slide.medical_history, 'Review AI-generated findings']
     );
     res.status(201).json(result.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PUT /api/reports/:id/sign-off — pathologist sign-off
+app.put('/api/reports/:id/sign-off', authMiddleware, authorize('pathologist', 'admin'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE pathology_reports SET status='signed', signed_by=$1, signed_at=NOW(), updated_at=CURRENT_TIMESTAMP WHERE id=$2 RETURNING *`,
+      [req.user.id, req.params.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Report not found' });
+    await logAudit(req.user.email, 'SIGN_OFF_REPORT', 'pathology_report', req.params.id, `Report signed off by ${req.user.email}`);
+    res.json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -337,12 +497,17 @@ app.put('/api/quality-controls/:id', authMiddleware, async (req, res) => {
     res.json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-app.post('/api/quality-controls/ai-assess/:slideId', authMiddleware, async (req, res) => {
+app.post('/api/quality-controls/ai-assess/:slideId', authMiddleware, aiRateLimiter, async (req, res) => {
   try {
     const qcResult = await pool.query('SELECT * FROM quality_controls WHERE slide_id = $1 ORDER BY id DESC LIMIT 1', [req.params.slideId]);
     if (qcResult.rows.length === 0) return res.status(404).json({ error: 'No QC record found for this slide' });
     const qcData = qcResult.rows[0];
     const aiResult = await ai.qualityAssessment(qcData);
+    // Persist assessment to quality_controls row
+    await pool.query(
+      'UPDATE quality_controls SET assessment = $1 WHERE id = $2',
+      [aiResult, qcData.id]
+    );
     res.json({ assessment: aiResult, qc_record: qcData });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -437,8 +602,10 @@ app.put('/api/equipment/:id', authMiddleware, async (req, res) => {
 // ==================== AUDIT LOGS ====================
 app.get('/api/audit-logs', authMiddleware, async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 100');
-    res.json(result.rows);
+    const { page, limit, offset } = paginate(req);
+    const total = parseInt((await pool.query('SELECT COUNT(*) FROM audit_logs')).rows[0].count);
+    const result = await pool.query('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT $1 OFFSET $2', [limit, offset]);
+    res.json({ data: result.rows, total, page, limit, totalPages: Math.ceil(total / limit) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 app.get('/api/audit-logs/:id', authMiddleware, async (req, res) => {
@@ -470,8 +637,7 @@ app.put('/api/settings/:id', authMiddleware, async (req, res) => {
       `UPDATE settings SET value=$1, updated_at=CURRENT_TIMESTAMP WHERE id=$2 RETURNING *`,
       [value, req.params.id]
     );
-    await pool.query(`INSERT INTO audit_logs (user_email, action, entity_type, entity_id, details) VALUES ($1, 'UPDATE', 'settings', $2, $3)`,
-      [req.user.email, req.params.id, `Updated setting to: ${value}`]);
+    await logAudit(req.user.email, 'UPDATE', 'settings', req.params.id, `Updated setting to: ${value}`);
     res.json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -502,11 +668,51 @@ app.get('/api/dashboard/stats', authMiddleware, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Apply pass 5 — additive backlog extensions
+const extensionsBuilder = require('./extensions');
+app.use('/api/ext', extensionsBuilder({
+  pool,
+  callOpenRouter: ai.callOpenRouter,
+  authMiddleware,
+  aiRateLimiter
+}));
+
 // Start server
 initDB().then(() => {
-  app.listen(PORT, () => {
-    console.log(`\n🔬 Pathology Analyzer API running on http://localhost:${PORT}`);
-    console.log(`📊 AI Model: ${process.env.OPENROUTER_MODEL}`);
+  
+// === Custom Feature Mounts (batch_06) ===
+app.use('/api/cf-ai-pathology-assistant', require('./routes/customFeat01_AiPathologyAssistant'));
+app.use('/api/cf-second-opinion-consensus', require('./routes/customFeat02_SecondOpinionConsensus'));
+app.use('/api/cf-educational-mode', require('./routes/customFeat03_EducationalMode'));
+app.use('/api/cf-registry-integration', require('./routes/customFeat04_RegistryIntegration'));
+app.use('/api/cf-quality-assurance-loop', require('./routes/customFeat05_QualityAssuranceLoop'));
+
+
+// === Batch 06 Gaps & Frontend Mounts ===
+app.use('/api/gap-quality-assess', require('./routes/gapFeat_quality_assess'));
+app.use('/api/gap-multi', require('./routes/gapFeat_multi'));
+app.use('/api/gap-auto-report-generate', require('./routes/gapFeat_auto_report_generate'));
+app.use('/api/gap-no-dedicated-routes-directory-all-routes-inline-in', require('./routes/gapFeat_no_dedicated_routes_directory_all_routes_inline_in'));
+app.use('/api/gap-no-dicom-server-integration-medical-image-standard', require('./routes/gapFeat_no_dicom_server_integration_medical_image_standard'));
+app.use('/api/gap-no-lis-lab-information-system-integration', require('./routes/gapFeat_no_lis_lab_information_system_integration'));
+app.use('/api/gap-no-whole-slide-image-wsi-viewer-only-stored-images', require('./routes/gapFeat_no_whole_slide_image_wsi_viewer_only_stored_images'));
+app.use('/api/gap-no-multi', require('./routes/gapFeat_no_multi'));
+app.use('/api/gap-no-webhooks-for-lab-result-delivery', require('./routes/gapFeat_no_webhooks_for_lab_result_delivery'));
+app.use('/api/gap-no-notifications-layer-grep-returned-0-notificatio', require('./routes/gapFeat_no_notifications_layer_grep_returned_0_notificatio'));
+app.use('/api/gap-limited-rbac-basic-auth-only', require('./routes/gapFeat_limited_rbac_basic_auth_only'));
+
+// === Custom Views (4 endpoints) — mounted BEFORE any 404 handler ===
+app.use('/api/custom-views', require('./routes/customViews'));
+
+// Health probe — used by automation
+app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'pathology-analyzer', ts: Date.now() }));
+
+// 404 handler — placed AFTER all routes (including custom-views)
+app.use((req, res) => res.status(404).json({ error: 'Not found', path: req.originalUrl }));
+
+app.listen(PORT, () => {
+    console.log(`\nPathology Analyzer API running on http://localhost:${PORT}`);
+    console.log(`AI Model: ${process.env.OPENROUTER_MODEL || 'anthropic/claude-3-5-sonnet-20241022'}`);
   });
 }).catch(err => {
   console.error('Failed to initialize database:', err);
