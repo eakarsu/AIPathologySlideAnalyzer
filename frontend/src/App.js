@@ -37,6 +37,11 @@ import GapLimitedRbacBasicAuthOnlyPage from './pages/GapLimitedRbacBasicAuthOnly
 import Extensions from './pages/Extensions'; // Apply pass 5
 import CustomViewsPage from './pages/CustomViewsPage';
 
+import CodexCustomVizFeature from './pages/CodexCustomVizFeature';
+import CodexOperationsFeature from './pages/CodexOperationsFeature';
+
+import TimelineView from './pages/TimelineView';
+
 function Sidebar({ onLogout }) {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const navItems = [
@@ -108,6 +113,10 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/insights/timeline" element={<TimelineView />} />
+        <Route path="/codex/custom-viz" element={<CodexCustomVizFeature />} />
+        <Route path="/codex/operations" element={<CodexOperationsFeature />} />
+
         <Route path="/" element={authed ? <Navigate to="/dashboard" replace /> : <Login onLogin={handleLogin} />} />
         {[
           { path: '/dashboard', el: <Dashboard /> },

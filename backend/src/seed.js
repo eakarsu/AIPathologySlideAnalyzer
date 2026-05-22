@@ -12,7 +12,7 @@ async function seed() {
         TRUNCATE users, patients, slides, ai_analyses, cancer_detections,
         cell_classifications, tissue_segmentations, pathology_reports, cases,
         quality_controls, annotations, billing_records, lab_equipment,
-        audit_logs, settings CASCADE;
+        audit_logs, settings RESTART IDENTITY CASCADE;
       `);
 
       // Seed Users
