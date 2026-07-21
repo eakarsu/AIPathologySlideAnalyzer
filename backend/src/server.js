@@ -14,8 +14,8 @@ const app = express();
 const PORT = process.env.BACKEND_PORT || 3001;
 
 const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET) {
-  console.error('FATAL: JWT_SECRET environment variable is required');
+if ((JWT_SECRET || '').length < 32 || !process.env.GOVERNANCE_TENANT_ID) {
+  console.error('FATAL: JWT_SECRET (32+ characters) and GOVERNANCE_TENANT_ID are required');
   process.exit(1);
 }
 
@@ -57,7 +57,7 @@ const authMiddleware = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'No token provided' });
   try {
-    req.user = jwt.verify(token, JWT_SECRET);
+    req.user = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
     next();
   } catch {
     res.status(401).json({ error: 'Invalid token' });
@@ -97,7 +97,7 @@ app.post('/api/auth/login', async (req, res) => {
     const user = result.rows[0];
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
-    const token = jwt.sign({ id: user.id, email: user.email, name: user.name, role: user.role }, JWT_SECRET, { expiresIn: '24h' });
+    const token = jwt.sign({ id: user.id, email: user.email, name: user.name, role: user.role, tenantId: process.env.GOVERNANCE_TENANT_ID }, JWT_SECRET, { expiresIn: '24h', algorithm: 'HS256' });
     res.json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role } });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -106,18 +106,19 @@ app.post('/api/auth/login', async (req, res) => {
 
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { email, password, name, role } = req.body;
+    const { email, password, name } = req.body;
     if (!email || !password || !name) return res.status(400).json({ error: 'email, password, and name are required' });
+    if (password.length < 12) return res.status(400).json({ error: 'Password must be at least 12 characters' });
     const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
     if (existing.rows.length > 0) return res.status(409).json({ error: 'Email already registered' });
     const hashed = await bcrypt.hash(password, 12);
-    const userRole = role && ['pathologist', 'lab_tech', 'admin'].includes(role) ? role : 'pathologist';
+    const userRole = 'pathologist';
     const result = await pool.query(
       'INSERT INTO users (email, password, name, role) VALUES ($1, $2, $3, $4) RETURNING id, email, name, role, created_at',
       [email, hashed, name, userRole]
     );
     const newUser = result.rows[0];
-    const token = jwt.sign({ id: newUser.id, email: newUser.email, name: newUser.name, role: newUser.role }, JWT_SECRET, { expiresIn: '24h' });
+    const token = jwt.sign({ id: newUser.id, email: newUser.email, name: newUser.name, role: newUser.role, tenantId: process.env.GOVERNANCE_TENANT_ID }, JWT_SECRET, { expiresIn: '24h', algorithm: 'HS256' });
     res.status(201).json({ token, user: newUser });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -668,38 +669,21 @@ app.get('/api/dashboard/stats', authMiddleware, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Apply pass 5 — additive backlog extensions
-const extensionsBuilder = require('./extensions');
-app.use('/api/ext', extensionsBuilder({
-  pool,
-  callOpenRouter: ai.callOpenRouter,
-  authMiddleware,
-  aiRateLimiter
-}));
+if (process.env.ENABLE_GENERATED_ROUTES === 'true' && process.env.NODE_ENV !== 'production') {
+  const extensionsBuilder = require('./extensions');
+  app.use('/api/ext', extensionsBuilder({ pool, callOpenRouter: ai.callOpenRouter, authMiddleware, aiRateLimiter }));
+}
 
 // Start server
 initDB().then(() => {
-  
-// === Custom Feature Mounts (batch_06) ===
-app.use('/api/cf-ai-pathology-assistant', require('./routes/customFeat01_AiPathologyAssistant'));
-app.use('/api/cf-second-opinion-consensus', require('./routes/customFeat02_SecondOpinionConsensus'));
-app.use('/api/cf-educational-mode', require('./routes/customFeat03_EducationalMode'));
-app.use('/api/cf-registry-integration', require('./routes/customFeat04_RegistryIntegration'));
-app.use('/api/cf-quality-assurance-loop', require('./routes/customFeat05_QualityAssuranceLoop'));
-
-
-// === Batch 06 Gaps & Frontend Mounts ===
-app.use('/api/gap-quality-assess', require('./routes/gapFeat_quality_assess'));
-app.use('/api/gap-multi', require('./routes/gapFeat_multi'));
-app.use('/api/gap-auto-report-generate', require('./routes/gapFeat_auto_report_generate'));
-app.use('/api/gap-no-dedicated-routes-directory-all-routes-inline-in', require('./routes/gapFeat_no_dedicated_routes_directory_all_routes_inline_in'));
-app.use('/api/gap-no-dicom-server-integration-medical-image-standard', require('./routes/gapFeat_no_dicom_server_integration_medical_image_standard'));
-app.use('/api/gap-no-lis-lab-information-system-integration', require('./routes/gapFeat_no_lis_lab_information_system_integration'));
-app.use('/api/gap-no-whole-slide-image-wsi-viewer-only-stored-images', require('./routes/gapFeat_no_whole_slide_image_wsi_viewer_only_stored_images'));
-app.use('/api/gap-no-multi', require('./routes/gapFeat_no_multi'));
-app.use('/api/gap-no-webhooks-for-lab-result-delivery', require('./routes/gapFeat_no_webhooks_for_lab_result_delivery'));
-app.use('/api/gap-no-notifications-layer-grep-returned-0-notificatio', require('./routes/gapFeat_no_notifications_layer_grep_returned_0_notificatio'));
-app.use('/api/gap-limited-rbac-basic-auth-only', require('./routes/gapFeat_limited_rbac_basic_auth_only'));
+  app.use('/api/governed-pathology-review', require('./governance'));
+  if (process.env.ENABLE_GENERATED_ROUTES === 'true' && process.env.NODE_ENV !== 'production') {
+    app.use('/api/cf-ai-pathology-assistant', require('./routes/customFeat01_AiPathologyAssistant'));
+    app.use('/api/cf-second-opinion-consensus', require('./routes/customFeat02_SecondOpinionConsensus'));
+    app.use('/api/cf-educational-mode', require('./routes/customFeat03_EducationalMode'));
+    app.use('/api/cf-registry-integration', require('./routes/customFeat04_RegistryIntegration'));
+    app.use('/api/cf-quality-assurance-loop', require('./routes/customFeat05_QualityAssuranceLoop'));
+  }
 
 // === Custom Views (4 endpoints) — mounted BEFORE any 404 handler ===
 app.use('/api/custom-views', require('./routes/customViews'));
