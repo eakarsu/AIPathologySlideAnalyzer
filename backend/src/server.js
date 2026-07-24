@@ -125,6 +125,16 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
+app.get('/api/auth/me', authMiddleware, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT id, email, name, role, created_at FROM users WHERE id = $1', [req.user.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Session lookup failed' });
+  }
+});
+
 // ==================== GENERIC CRUD HELPER ====================
 function createCRUD(tableName, idField = 'id') {
   return {
@@ -288,7 +298,7 @@ app.post('/api/analyses/run/:slideId', authMiddleware, aiRateLimiter, async (req
       [slide.id, confidenceScore, findings, process.env.OPENROUTER_MODEL || 'anthropic/claude-3-5-sonnet-20241022', processingTime, JSON.stringify(structured)]
     );
     await logAudit(req.user.email, 'AI_ANALYSIS', 'slide', slide.id, `AI analysis completed for slide ${slide.slide_id}`);
-    res.status(201).json(result.rows[0]);
+    res.json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -674,8 +684,34 @@ if (process.env.ENABLE_GENERATED_ROUTES === 'true' && process.env.NODE_ENV !== '
   app.use('/api/ext', extensionsBuilder({ pool, callOpenRouter: ai.callOpenRouter, authMiddleware, aiRateLimiter }));
 }
 
+async function initializeRuntime() {
+  await initDB();
+  if (process.env.MIGRATE_ON_START !== 'true') return;
+  const email = process.env.PROVISION_ADMIN_EMAIL || process.env.ADMIN_EMAIL;
+  const password = process.env.PROVISION_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD;
+  if (!email || !password) throw new Error('Runtime admin credentials are required');
+  const passwordHash = await bcrypt.hash(password, 12);
+  await pool.query(
+    `INSERT INTO users(email,password,name,role) VALUES($1,$2,$3,'admin')
+     ON CONFLICT(email) DO UPDATE SET password=EXCLUDED.password,name=EXCLUDED.name,role='admin'`,
+    [email, passwordHash, process.env.PROVISION_ADMIN_NAME || 'Runtime Administrator']
+  );
+  const patient = (await pool.query(
+    `INSERT INTO patients(patient_id,first_name,last_name,status)
+     VALUES('runtime-acceptance-patient','Runtime','Acceptance','active')
+     ON CONFLICT(patient_id) DO UPDATE SET first_name=EXCLUDED.first_name,last_name=EXCLUDED.last_name
+     RETURNING id`
+  )).rows[0];
+  await pool.query(
+    `INSERT INTO slides(slide_id,patient_id,tissue_type,stain_type,organ,magnification,status,notes)
+     VALUES('runtime-acceptance-slide',$1,'epithelial tissue','H&E','colon','40x','ready','Runtime acceptance fixture without patient health information')
+     ON CONFLICT(slide_id) DO UPDATE SET patient_id=EXCLUDED.patient_id,tissue_type=EXCLUDED.tissue_type,stain_type=EXCLUDED.stain_type,organ=EXCLUDED.organ,magnification=EXCLUDED.magnification,status=EXCLUDED.status,notes=EXCLUDED.notes`,
+    [patient.id]
+  );
+}
+
 // Start server
-initDB().then(() => {
+initializeRuntime().then(() => {
   app.use('/api/governed-pathology-review', require('./governance'));
   if (process.env.ENABLE_GENERATED_ROUTES === 'true' && process.env.NODE_ENV !== 'production') {
     app.use('/api/cf-ai-pathology-assistant', require('./routes/customFeat01_AiPathologyAssistant'));

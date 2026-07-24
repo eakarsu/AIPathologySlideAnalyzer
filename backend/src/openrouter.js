@@ -3,6 +3,7 @@ require('dotenv').config({ path: require('path').join(__dirname, '../../.env') }
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'anthropic/claude-3-5-sonnet-20241022';
+const OPENROUTER_ENDPOINT = new URL(`${String(process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, '')}/chat/completions`);
 
 async function callOpenRouter(systemPrompt, userPrompt) {
   return new Promise((resolve, reject) => {
@@ -17,13 +18,14 @@ async function callOpenRouter(systemPrompt, userPrompt) {
     });
 
     const options = {
-      hostname: 'openrouter.ai',
-      path: '/api/v1/chat/completions',
+      hostname: OPENROUTER_ENDPOINT.hostname,
+      port: OPENROUTER_ENDPOINT.port || 443,
+      path: `${OPENROUTER_ENDPOINT.pathname}${OPENROUTER_ENDPOINT.search}`,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-        'HTTP-Referer': 'http://localhost:3000',
+        'HTTP-Referer': process.env.CLIENT_URL || 'http://localhost:3000',
         'X-Title': 'AI Pathology Slide Analyzer',
       },
     };
@@ -114,13 +116,14 @@ async function analyzeSlideImage(base64Data, mimeType = 'image/jpeg') {
     });
 
     const options = {
-      hostname: 'openrouter.ai',
-      path: '/api/v1/chat/completions',
+      hostname: OPENROUTER_ENDPOINT.hostname,
+      port: OPENROUTER_ENDPOINT.port || 443,
+      path: `${OPENROUTER_ENDPOINT.pathname}${OPENROUTER_ENDPOINT.search}`,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-        'HTTP-Referer': 'http://localhost:3000',
+        'HTTP-Referer': process.env.CLIENT_URL || 'http://localhost:3000',
         'X-Title': 'AI Pathology Slide Analyzer',
       },
     };
