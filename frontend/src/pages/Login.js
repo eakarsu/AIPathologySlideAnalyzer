@@ -11,8 +11,8 @@ export default function Login({ onLogin }) {
   const [loading, setLoading] = useState(false);
 
   const autofill = () => {
-    setEmail('admin@pathlab.com');
-    setPassword('password123');
+    setEmail(process.env.REACT_APP_DEMO_EMAIL || '');
+    setPassword(process.env.REACT_APP_DEMO_PASSWORD || '');
   };
 
   const handleLogin = async (e) => {
