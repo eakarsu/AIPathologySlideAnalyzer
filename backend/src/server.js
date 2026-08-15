@@ -723,6 +723,7 @@ initializeRuntime().then(() => {
 
 // === Custom Views (4 endpoints) — mounted BEFORE any 404 handler ===
 app.use('/api/custom-views', require('./routes/customViews'));
+app.use('/api', require('./routes/generatedFeatures')({ authMiddleware, aiRateLimiter, callOpenRouter: ai.callOpenRouter }));
 
 // Health probe — used by automation
 app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'pathology-analyzer', ts: Date.now() }));

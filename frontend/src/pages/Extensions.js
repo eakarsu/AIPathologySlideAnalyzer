@@ -1,3 +1,4 @@
+import GeneratedAiResponse from './GeneratedAiResponse';
 // Apply pass 5 — Extensions UI (DICOM, LIS, WSI, MDC, second-opinion, registry, compliance).
 import React, { useEffect, useState } from 'react';
 
@@ -12,9 +13,7 @@ async function api(p, opts = {}) {
   return { ok: r.ok, status: r.status, body };
 }
 const Pre = ({ data }) => data == null ? null : (
-  <pre style={{ background: '#0f172a', color: '#cbd5e1', padding: 10, borderRadius: 6, overflow: 'auto', maxHeight: 300 }}>
-    {typeof data === 'string' ? data : JSON.stringify(data, null, 2)}
-  </pre>
+  <GeneratedAiResponse response={data} />
 );
 
 export default function Extensions() {
