@@ -60,7 +60,7 @@ export default function Login({ onLogin }) {
         </div>
 
         {mode === 'login' && (
-          <button className="autofill-btn" onClick={autofill}>Click to auto-fill credentials</button>
+          <button className="autofill-btn" onClick={autofill}>Auto Fill Demo Credentials</button>
         )}
 
         {error && <div style={{ background: '#dc262620', color: '#f87171', padding: '10px 14px', borderRadius: 8, marginBottom: 16, fontSize: 13 }}>{error}</div>}
