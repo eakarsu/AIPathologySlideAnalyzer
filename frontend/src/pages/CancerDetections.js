@@ -38,7 +38,7 @@ export default function CancerDetections() {
         { key: 'location_data', label: 'Location Data' },
         { key: 'created_at', label: 'Created' },
       ]}
-      aiFields={['recommendation']}
+      aiFields={['markers', 'recommendation', 'location_data']}
       aiActions={[
         {
           label: 'Run AI Cancer Detection',

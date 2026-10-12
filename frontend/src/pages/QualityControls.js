@@ -44,6 +44,7 @@ export default function QualityControls() {
         { key: 'pass_fail', label: 'Pass/Fail' },
         { key: 'issues', label: 'Issues' },
         { key: 'corrective_action', label: 'Corrective Action' },
+        { key: 'assessment', label: 'AI Quality Assessment' },
         { key: 'created_at', label: 'Created' },
       ]}
       aiActions={[
@@ -56,7 +57,7 @@ export default function QualityControls() {
           successMsg: 'AI quality assessment complete',
         },
       ]}
-      aiFields={['corrective_action']}
+      aiFields={['corrective_action', 'assessment']}
       newItemDefaults={{ qc_id: `QC-${Date.now().toString(36).toUpperCase()}`, pass_fail: 'pass' }}
     />
   );

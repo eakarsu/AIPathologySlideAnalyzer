@@ -1,23 +1,8 @@
+import RecordDialog from './RecordDialog';
+import AIResultView, { AIResultValue } from './AIResultView';
 import React, { useState, useEffect } from 'react';
 
-function formatAIResponse(text) {
-  if (!text) return '';
-  let html = text
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-    .replace(/^# (.+)$/gm, '<h2>$1</h2>')
-    .replace(/^[-*] (.+)$/gm, '<li>$1</li>')
-    .replace(/\n{2,}/g, '</p><p>')
-    .replace(/\n/g, '<br/>');
-  html = html.replace(/(<li>.*?<\/li>)/gs, '<ul>$1</ul>');
-  html = html.replace(/<\/ul>\s*<ul>/g, '');
-  return `<p>${html}</p>`;
-}
-
-function isLongText(val) {
-  return typeof val === 'string' && val.length > 200;
-}
+const structuredResultField = (key, aiFields) => Boolean(aiFields?.includes(key) || ['result_data', 'raw_response', 'assessment'].includes(key));
 
 export default function CrudPage({
   title, icon, apiGet, apiGetOne, apiCreate, apiUpdate, apiDelete,
@@ -146,7 +131,7 @@ export default function CrudPage({
             {filtered.length === 0 ? (
               <tr><td colSpan={columns.length}><div className="empty-state"><div className="empty-icon">{icon}</div><div>No items found</div></div></td></tr>
             ) : filtered.map(item => (
-              <tr key={item.id} onClick={() => handleRowClick(item)}>
+              <tr key={item.id} onClick={() => handleRowClick(item)} tabIndex={0} onKeyDown={(event) => { if ((event.key === 'Enter' || event.key === ' ') && event.target === event.currentTarget) { event.preventDefault(); (() => handleRowClick(item))(event); } }}>
                 {columns.map(c => (
                   <td key={c.key}>
                     {c.render ? c.render(item[c.key], item) :
@@ -189,11 +174,10 @@ export default function CrudPage({
 
       {/* Detail Panel */}
       {showDetail && selected && (
-        <div className="detail-overlay" onClick={(e) => { if (e.target === e.currentTarget) { setShowDetail(false); setAiResult(null); } }}>
-          <div className="detail-panel">
+        <RecordDialog title={title} onClose={() => { setShowDetail(false); setAiResult(null); }}><div className="detail-panel">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <h2>Details</h2>
-              <button className="btn btn-secondary btn-sm" onClick={() => { setShowDetail(false); setAiResult(null); }}>Close</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => { setShowDetail(false); setAiResult(null); }}>Cancel</button>
             </div>
             <div className="detail-actions">
               {apiUpdate && <button className="btn btn-primary btn-sm" onClick={handleEdit}>Edit</button>}
@@ -211,15 +195,15 @@ export default function CrudPage({
               const val = selected[key];
               if (val === null || val === undefined) return null;
 
-              const isAiField = aiFields && aiFields.includes(key);
-              if (isAiField && isLongText(val)) {
+              const isAiField = structuredResultField(key, aiFields);
+              if (isAiField) {
                 return (
                   <div key={key} className="ai-response" style={{ marginBottom: 16 }}>
                     <div className="ai-response-header">
-                      <span className="ai-badge">AI Generated</span>
+                      <span className="ai-badge">Saved AI result</span>
                       <span className="ai-model">{label}</span>
                     </div>
-                    <div className="ai-response-body" dangerouslySetInnerHTML={{ __html: formatAIResponse(val) }} />
+                    <div className="ai-response-body"><AIResultValue value={val} /></div>
                   </div>
                 );
               }
@@ -241,24 +225,8 @@ export default function CrudPage({
               </div>
             )}
 
-            {aiResult && (
-              <div className="ai-response">
-                <div className="ai-response-header">
-                  <span className="ai-badge">AI Analysis Result</span>
-                  <span className="ai-model">claude-3-5-sonnet-20241022 via OpenRouter</span>
-                </div>
-                <div className="ai-response-body" dangerouslySetInnerHTML={{
-                  __html: formatAIResponse(
-                    typeof aiResult === 'string' ? aiResult :
-                    aiResult.findings || aiResult.recommendation || aiResult.notes ||
-                    aiResult.assessment || aiResult.microscopic_findings ||
-                    JSON.stringify(aiResult, null, 2)
-                  )
-                }} />
-              </div>
-            )}
-          </div>
-        </div>
+            {aiResult && <AIResultView response={aiResult} title={`${title.replace(/s$/, '')} AI result`} label="AI analysis result" />}
+          </div></RecordDialog>
       )}
 
       {/* Form Modal */}

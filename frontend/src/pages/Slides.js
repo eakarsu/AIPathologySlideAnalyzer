@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import CrudPage from '../components/CrudPage';
+import AIResultView from '../components/AIResultView';
 import api from '../services/api';
 
 export default function Slides() {
@@ -56,26 +57,7 @@ export default function Slides() {
         </div>
       )}
 
-      {imageResult && (
-        <div style={{ margin: '0 0 16px 0', padding: 16, background: '#1f2937', borderRadius: 8, border: '1px solid #374151' }}>
-          <div style={{ color: '#60a5fa', fontWeight: 'bold', marginBottom: 8 }}>Image Analysis Result</div>
-          {imageResult.error ? (
-            <div style={{ color: '#f87171' }}>{imageResult.error}</div>
-          ) : (
-            <div style={{ fontSize: 13, color: '#d1d5db' }}>
-              {imageResult.tissue_type && <div><strong>Tissue:</strong> {imageResult.tissue_type}</div>}
-              {imageResult.cell_morphology && <div><strong>Cell Morphology:</strong> {imageResult.cell_morphology}</div>}
-              {imageResult.cancer_probability != null && (
-                <div><strong>Cancer Probability:</strong> <span style={{ color: imageResult.cancer_probability > 0.6 ? '#f87171' : '#34d399' }}>{(imageResult.cancer_probability * 100).toFixed(1)}%</span></div>
-              )}
-              {imageResult.confidence != null && <div><strong>Confidence:</strong> {(imageResult.confidence * 100).toFixed(1)}%</div>}
-              {imageResult.findings && imageResult.findings.length > 0 && (
-                <div><strong>Findings:</strong> {Array.isArray(imageResult.findings) ? imageResult.findings.join(', ') : imageResult.findings}</div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+      {imageResult && <AIResultView response={imageResult} title="Slide image analysis" label="AI analysis result" />}
 
       <CrudPage
         title="Slides"

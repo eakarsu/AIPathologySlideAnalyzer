@@ -35,7 +35,7 @@ export default function Analyses() {
         { key: 'result_data', label: 'Result Data' },
         { key: 'created_at', label: 'Created' },
       ]}
-      aiFields={['findings']}
+      aiFields={['findings', 'result_data']}
       aiActions={[
         {
           label: 'Re-run AI Analysis',

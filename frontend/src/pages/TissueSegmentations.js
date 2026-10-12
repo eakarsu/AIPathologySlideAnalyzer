@@ -36,7 +36,7 @@ export default function TissueSegmentations() {
         { key: 'notes', label: 'AI Segmentation Notes' },
         { key: 'created_at', label: 'Created' },
       ]}
-      aiFields={['notes']}
+      aiFields={['boundary_data', 'notes']}
       aiActions={[
         {
           label: 'Run AI Tissue Segmentation',

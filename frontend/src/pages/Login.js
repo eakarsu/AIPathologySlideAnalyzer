@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
 import api from '../services/api';
 
+const demoEmail = process.env.REACT_APP_DEMO_EMAIL || '';
+const demoPassword = process.env.REACT_APP_DEMO_PASSWORD || '';
+const demoCredentialsEnabled = process.env.REACT_APP_ENABLE_DEMO_CREDENTIAL_AUTOFILL === 'true' && Boolean(demoEmail && demoPassword);
+
 export default function Login({ onLogin }) {
   const [mode, setMode] = useState('login'); // 'login' | 'register'
   const [email, setEmail] = useState('');
@@ -11,8 +15,14 @@ export default function Login({ onLogin }) {
   const [loading, setLoading] = useState(false);
 
   const autofill = () => {
-    setEmail(process.env.REACT_APP_DEMO_EMAIL || '');
-    setPassword(process.env.REACT_APP_DEMO_PASSWORD || '');
+    if (!demoCredentialsEnabled) {
+      setError('Demo credentials are not enabled for this local environment.');
+      return;
+    }
+    setMode('login');
+    setEmail(demoEmail);
+    setPassword(demoPassword);
+    setError('');
   };
 
   const handleLogin = async (e) => {
@@ -60,7 +70,7 @@ export default function Login({ onLogin }) {
         </div>
 
         {mode === 'login' && (
-          <button className="autofill-btn" onClick={autofill}>Auto Fill Demo Credentials</button>
+          <button type="button" className="autofill-btn" onClick={autofill}>Fill Demo Credentials</button>
         )}
 
         {error && <div style={{ background: '#dc262620', color: '#f87171', padding: '10px 14px', borderRadius: 8, marginBottom: 16, fontSize: 13 }}>{error}</div>}
@@ -109,9 +119,7 @@ export default function Login({ onLogin }) {
 
         {mode === 'login' && (
           <div style={{ textAlign: 'center', marginTop: 24, fontSize: 12, color: '#71717a' }}>
-            <div>Demo Accounts:</div>
-            <div style={{ marginTop: 4 }}>admin@pathlab.com | pathologist@pathlab.com</div>
-            <div>Password: password123</div>
+            {demoCredentialsEnabled ? <div>Configured demo account: {demoEmail}</div> : <div>Demo credential filling is available when enabled in local configuration.</div>}
           </div>
         )}
       </div>
